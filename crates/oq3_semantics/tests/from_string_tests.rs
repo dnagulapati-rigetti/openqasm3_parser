@@ -1138,8 +1138,7 @@ extern add(int a, int b) -> int;
 
     assert!(
         errors.is_empty(),
-        "unexpected syntax/semantic errors: {:?}",
-        errors
+        "unexpected syntax/semantic errors: {errors:?}"
     );
     assert_eq!(program.len(), 1);
 
