@@ -40,11 +40,11 @@ printed.
 > Don't run tests with `cargo test`. Rather use [./run_tests.sh](./run_tests.sh).
 > Or run the command contained therein:
 >
-> `cargo test --lib --tests -- --skip sourcegen_ast --skip sourcegen_ast_nodes`
+> `cargo test --lib --tests
 
 All pull requests must pass a CI check before being merged. You can check if CI will pass locally with
 ```shell
-cargo fmt --all -- --check && cargo build --verbose && cargo clippy -- -D warnings && cargo test --verbose -- --skip sourcegen_ast --skip sourcegen_ast_nodes
+cargo fmt --all -- --check && cargo build --verbose && cargo clippy -- -D warnings && cargo test --verbose
 ```
 A script for checking CI locally is [./local_CI.sh](./local_CI.sh)
 
@@ -60,10 +60,12 @@ An ["ungrammar"](https://docs.rs/ungrammar/latest/ungrammar/) (and [here](https:
 An ungrammar for OpenQASM 3 is
 in [./crates/oq3_syntax/openqasm3.ungram](./crates/oq3_syntax/openqasm3.ungram).
 For most work, it need not be edited.
+
+After editing, run `just sourcegen`
+
 If the file is modified,
-three source files must be regenerated:
+three source files may be updated:
 * [./crates/oq3_parser/src/syntax_kind/syntax_kind_enum.rs](./crates/oq3_parser/src/syntax_kind/syntax_kind_enum.rs)
 * [./crates/oq3_syntax/src/ast/generated/nodes.rs](./crates/oq3_syntax/src/ast/generated/nodes.rs)
 * [./crates/oq3_syntax/src/ast/generated/tokens.rs](./crates/oq3_syntax/src/ast/generated/tokens.rs)
 
-For further information, see [./codegen_scripts/README.md](./codegen_scripts/README.md)

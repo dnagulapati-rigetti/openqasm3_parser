@@ -1131,7 +1131,6 @@ uint a = -99;
 
 #[test]
 fn test_from_string_declaration_extern_lowers_to_asg_externstmt() {
-
     let code = r#"
 extern add(int a, int b) -> int;
 "#;

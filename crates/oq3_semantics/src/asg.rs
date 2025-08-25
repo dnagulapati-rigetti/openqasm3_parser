@@ -179,7 +179,7 @@ pub enum Stmt {
     DeclareHardwareQubit(DeclareHardwareQubit),
     DefStmt(DefStmt),
     ExternStmt(ExternStmt), // A statement because extern does not return anything
-    DefCal, // stub
+    DefCal,                 // stub
     Delay(DelayStmt),
     End,
     ExprStmt(TExpr),
