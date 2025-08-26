@@ -20,8 +20,6 @@ assert_empty_git_status:
         echo ""; \
         echo "Diff against HEAD:"; \
         git --no-pager diff; \
-    else \
-        echo "Git working tree is clean."; \
     fi
 
 check_sourcegen: assert_empty_git_status sourcegen assert_empty_git_status
