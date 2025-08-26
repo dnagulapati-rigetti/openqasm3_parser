@@ -23,6 +23,8 @@ jobs:
       run: cargo install just
     - name: Rust Format
       run: just ci
+    - name: Check source generation
+      run: just check_sourcegen
 
   msrv:
     runs-on: ${{ matrix.os }}

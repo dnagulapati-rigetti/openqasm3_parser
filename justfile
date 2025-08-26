@@ -8,12 +8,13 @@ ci:
     cargo test --verbose --lib --tests
     cargo clippy --all-targets --all-features -- -D warnings -D clippy::dbg_macro
 
+# Regenerate source files from ungrammar and reformat
 sourcegen:
     cargo clean
     cargo build -p oq3_syntax --features sourcegen
     cargo fmt -p oq3_syntax -p oq3_parser
 
-assert_empty_git_status:
+_assert_empty_git_status:
     @if [ -n "$$(git status --porcelain)" ]; then \
         echo "Git working tree has uncommitted changes:"; \
         git --no-pager status --short; \
@@ -22,4 +23,5 @@ assert_empty_git_status:
         git --no-pager diff; \
     fi
 
-check_sourcegen: assert_empty_git_status sourcegen assert_empty_git_status
+# Check that source files are up to date (assumes a clean working tree)
+check_sourcegen: _assert_empty_git_status sourcegen _assert_empty_git_status

@@ -1,28 +1,8 @@
 ## Prerequisites
 
 This project uses [`just`](https://github.com/casey/just) as a command runner.  
+
 Install it first:
-
-### macOS (Homebrew)
-
-```sh
-brew install just
-```
-
-### Ubuntu / Debian
-
-```sh
-sudo apt-get update
-sudo apt-get install just
-```
-
-### Fedora
-
-```sh
-sudo dnf install just
-```
-
-### From Cargo
 
 ```sh
 cargo install just
@@ -88,13 +68,6 @@ All pull requests must pass CI. To run the full suite locally, use:
 just ci
 ```
 
-This runs:
-
-- `cargo fmt --all -- --check`  
-- `cargo build --release --verbose`  
-- `cargo test --verbose --lib --tests`  
-- `cargo clippy --all-targets --all-features -- -D warnings -D clippy::dbg_macro`  
-
 > Do not run `cargo test` directly — always use `just ci` to match CI.
 
 ### Clippy
@@ -113,23 +86,13 @@ An ungrammar for OpenQASM 3 is
 in [./crates/oq3_syntax/openqasm3.ungram](./crates/oq3_syntax/openqasm3.ungram).
 For most work, it need not be edited.
 
-If the file is modified,
+If the file is modified, run:
 
-1. Regenerate code:
+```sh
+just sourcegen
+```
 
-   ```sh
-   just sourcegen
-   ```
-
-   This triggers the `build.rs` sourcegen pipeline (active only with the `sourcegen` feature).
-
-2. Verify that generated sources are up to date:
-
-   ```sh
-   just check_sourcegen
-   ```
-
-   This ensures the repo is clean and generated files match expectations.
+This triggers the `build.rs` sourcegen pipeline (active only with the `sourcegen` feature).
 
 The following three source files may be updated:
 * [./crates/oq3_parser/src/syntax_kind/syntax_kind_enum.rs](./crates/oq3_parser/src/syntax_kind/syntax_kind_enum.rs)
@@ -143,10 +106,3 @@ Commit regenerated files along with your changes.
 - Code must be formatted with `cargo fmt`.  
 - Lints must pass with `cargo clippy` (warnings are treated as errors).  
 - Avoid committing debug macros (`dbg!`) — they are denied in CI.  
-
-
-### Summary of Useful Commands
-
-- `just ci` — run full CI locally (format, build, test, lint)  
-- `just sourcegen` — regenerate parser/AST code after grammar changes  
-- `just check_sourcegen` — ensure generated code is up to date  
