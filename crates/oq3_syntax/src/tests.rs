@@ -325,3 +325,72 @@ z + int[32](x);
     let parse = SourceFile::parse(code);
     assert_eq!(parse.errors.len(), 0);
 }
+
+#[test]
+fn parse_extern_check() {
+    let code = r##"
+extern f(int x);
+    "##;
+    let parse = SourceFile::parse(code);
+
+    // We expect no errors (zero errors) while parsing extern statements.
+    assert_eq!(parse.errors.len(), 0);
+}
+
+#[test]
+fn parse_extern_complete_test() {
+    let code = r##"
+extern foo(int a, float[32] b) -> bit;
+    "##;
+    let parse = SourceFile::parse(code);
+    assert!(
+        parse.clone().ok().is_ok(),
+        "unexpected errors: {:?}",
+        parse.errors
+    );
+
+    // Inspect the AST
+    use crate::ast;
+    use ast::HasName;
+    let file: SourceFile = parse.tree();
+
+    let mut ext = None;
+    for stmt in file.statements() {
+        if let ast::Stmt::Extern(e) = stmt {
+            ext = Some(e);
+        }
+    }
+    let ext = ext.expect("no extern stmt found");
+
+    // name
+    let name = ext.name().expect("extern has no name");
+    assert_eq!(name.text(), "foo");
+
+    // params: (int a, float[32] b)
+    let tplist = ext
+        .typed_param_list()
+        .expect("extern has no typed_param_list");
+    let mut params = tplist.typed_params();
+
+    let p1 = params.next().expect("missing param 1");
+    assert_eq!(p1.name().unwrap().text(), "a");
+    assert_eq!(p1.scalar_type().unwrap().kind(), ast::ScalarTypeKind::Int);
+
+    let p2 = params.next().expect("missing param 2");
+    assert_eq!(p2.name().unwrap().text(), "b");
+    assert_eq!(p2.scalar_type().unwrap().kind(), ast::ScalarTypeKind::Float);
+
+    // designator [32]
+    let desg = p2.scalar_type().unwrap().designator().unwrap();
+    // the designator is an Expr; just ensure it exists
+    assert!(desg.expr().is_some());
+
+    assert!(params.next().is_none(), "unexpected extra params");
+
+    // return type: -> bit
+    let ret_sig = ext
+        .return_signature()
+        .expect("extern missing return_signature");
+    let ret_ty = ret_sig.scalar_type().expect("extern missing scalar_type");
+    assert_eq!(ret_ty.kind(), ast::ScalarTypeKind::Bit);
+}
