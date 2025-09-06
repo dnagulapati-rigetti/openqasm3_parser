@@ -70,9 +70,15 @@ just ci
 
 > Do not run `cargo test` directly — always use `just ci` to match CI.
 
+Note, the github pipeline also verifies that generated sources are up to date:
+
+```sh
+just check_sourcegen
+```
+
 ### Clippy
 
-Clippy is included in CI. For manual inspection with paging:
+Clippy is included in the `just ci` recipe. For manual inspection with paging:
 
 ```sh
 cargo clippy --color always |& less -R
@@ -92,7 +98,7 @@ If the file is modified, run:
 just sourcegen
 ```
 
-This triggers the `build.rs` sourcegen pipeline (active only with the `sourcegen` feature).
+> This triggers the `build.rs` script in `oq3_parser` with the `sourcegen` feature.
 
 The following three source files may be updated:
 * [./crates/oq3_parser/src/syntax_kind/syntax_kind_enum.rs](./crates/oq3_parser/src/syntax_kind/syntax_kind_enum.rs)

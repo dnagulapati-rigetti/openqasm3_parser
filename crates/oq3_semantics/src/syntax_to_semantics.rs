@@ -1126,8 +1126,7 @@ fn from_assignment_stmt(
 ) -> Option<asg::Stmt> {
     let nameb = assignment_stmt.identifier(); // LHS of assignment
                                               // LHS is an identifier
-    if nameb.is_some() {
-        let name = nameb.as_ref().unwrap();
+    if let Some(name) = &nameb {
         let name_str = name.string();
         let mut expr = from_expr(assignment_stmt.rhs(), context).unwrap(); // rhs of `=` operator
 
