@@ -447,3 +447,19 @@ extern foo(int a, float[32] b) -> bit;
     let ret_ty = ret_sig.scalar_type().expect("extern missing scalar_type");
     assert_eq!(ret_ty.kind(), ast::ScalarTypeKind::Bit);
 }
+
+#[test]
+fn parse_array_decl_ast_test() {
+    let code = r##"
+array[int[8], 4] a;
+array[float[64], 2, 3] m;
+extern foo(array[int[32], 4] a) -> bit;
+array[int[8], 4] c = {1, 2, 3, 4};
+    "##;
+    let parse = SourceFile::parse(code);
+    assert!(
+        parse.clone().ok().is_ok(),
+        "unexpected errors: {:?}",
+        parse.errors
+    );
+}

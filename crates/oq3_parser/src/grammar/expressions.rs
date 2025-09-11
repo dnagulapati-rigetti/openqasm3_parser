@@ -92,6 +92,7 @@ pub(crate) fn stmt(p: &mut Parser<'_>) {
         m.complete(p, ANNOTATION_STATEMENT);
         return;
     }
+   
 
     // FIXME: straighten out logic
     if !(p.current().is_classical_type() && (p.nth(1) == T!['('] || p.nth(1) == T!['[']))
@@ -510,13 +511,22 @@ pub(crate) fn indexed_identifier(p: &mut Parser<'_>, lhs: CompletedMarker) -> Co
     m.complete(p, INDEXED_IDENTIFIER)
 }
 
-pub(crate) fn set_expression(p: &mut Parser<'_>) {
+pub(crate) fn array_literal(p: &mut Parser<'_>) -> CompletedMarker {
     assert!(p.at(T!['{']));
     let m = p.start();
     p.bump(T!['{']);
     params::expression_list(p);
-    p.bump(T!['}']);
-    m.complete(p, SET_EXPRESSION);
+    p.expect(T!['}']);
+    m.complete(p, ARRAY_LITERAL)  
+}
+
+pub(crate) fn set_expression(p: &mut Parser<'_>) -> CompletedMarker {
+    assert!(p.at(T!['{']));
+    let m = p.start();
+    p.bump(T!['{']);
+    params::expression_list(p);
+    p.expect(T!['}']);
+    m.complete(p, SET_EXPRESSION)
 }
 
 pub(crate) fn index_operator(p: &mut Parser<'_>) {

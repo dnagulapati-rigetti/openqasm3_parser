@@ -59,16 +59,18 @@ pub enum Type {
     Bool(IsConst),           // bool field is is_const
     Duration(IsConst),
     Stretch(IsConst),
-    // Arrays
+
+    // Arrays (concrete variants)
     BitArray(ArrayDims, IsConst),
     QubitArray(ArrayDims),
-    IntArray(ArrayDims),
-    UIntArray(ArrayDims),
-    FloatArray(ArrayDims),
-    AngleArray(ArrayDims),
-    ComplexArray(ArrayDims),
-    BoolArray(ArrayDims),
-    DurationArray(ArrayDims),
+    IntArray(ArrayDims, Width, IsConst),
+    UIntArray(ArrayDims, Width, IsConst),
+    FloatArray(ArrayDims, Width, IsConst),
+    AngleArray(ArrayDims, Width, IsConst),
+    ComplexArray(ArrayDims, Width, IsConst),
+    BoolArray(ArrayDims, IsConst),
+    DurationArray(ArrayDims, IsConst),
+
 
     // Other
     Gate(usize, usize), // (num classical args, num quantum args)
@@ -81,16 +83,15 @@ pub enum Type {
     Undefined,
 }
 
-// wow. Is there a less boiler-plated way?
 // Return `true` if `ty1 == ty2` except that the `is_const`
 // property is allowed to differ.
 pub(crate) fn equal_up_to_constness(ty1: &Type, ty2: &Type) -> bool {
     use Type::*;
-    // FIXME: Make sure we can remove following. Looks inefficient
     if ty1 == ty2 {
         return true;
     }
     match (ty1, ty2) {
+        // Scalars
         (Bit(_), Bit(_)) => true,
         (Duration(_), Duration(_)) => true,
         (Bool(_), Bool(_)) => true,
@@ -100,15 +101,25 @@ pub(crate) fn equal_up_to_constness(ty1: &Type, ty2: &Type) -> bool {
         (Float(w1, _), Float(w2, _)) => w1 == w2,
         (Complex(w1, _), Complex(w2, _)) => w1 == w2,
         (Angle(w1, _), Angle(w2, _)) => w1 == w2,
-        (BitArray(dims1, _), BitArray(dims2, _)) => dims1 == dims2,
+
+        // Arrays: same family and same dims
+        (BitArray(d1, _), BitArray(d2, _)) => d1 == d2,
+        (QubitArray(d1), QubitArray(d2)) => d1 == d2,
+        (IntArray(d1, w1, _), IntArray(d2,w2, _)) => d1 == d2 && w1 == w2,
+        (UIntArray(d1, w1, _), UIntArray(d2,w2, _)) => d1 == d2 && w1 == w2,
+        (FloatArray(d1, w1, _), FloatArray(d2,w2, _)) => d1 == d2 && w1 == w2,
+        (AngleArray(d1, w1, _), AngleArray(d2,w2, _)) => d1 == d2 && w1 == w2,
+        (ComplexArray(d1, w1, _), ComplexArray(d2,w2, _)) => d1 == d2 && w1 == w2,
+        (BoolArray(d1,_), BoolArray(d2,_)) => d1 == d2,
+        (DurationArray(d1,_), DurationArray(d2,_)) => d1 == d2,
+
         _ => false,
     }
 }
 
 // Are the base types of the scalars equal?
-// (That is modulo width anc constness?)
-// Returns `false` for all array types. Not sure what
-// we need from arrays.
+// (That is modulo width and constness?)
+// Returns `false` for all array types.
 fn equal_base_type(ty1: &Type, ty2: &Type) -> bool {
     use Type::*;
     matches!(
@@ -179,22 +190,10 @@ impl Type {
         use Type::*;
         match self {
             Int(w, _) | UInt(w, _) | Float(w, _) | Angle(w, _) | Complex(w, _) => *w,
-            //            Bit(w, _) | Int(w, _) | UInt(w, _)  | Float(w, _)  | Angle(w, _)  | Complex(w, _) | Qubit(w) => *w,
             _ => None,
         }
     }
 
-    // FIXME: I think types should be `const` by default.
-    // We can't rebind qubit names or gatenames.
-    // We have changed it to `true` for now.
-    // Two ways to implement is_const. We choose second one.
-    // 1. Return Some(true) or Some(false) for types that can be const, and None otherwise.
-    // 2. Return true if type can be const and is const, otherwise false.
-    //
-    // The second choice emphasizes that, as in C, the "type modifier" `const` is an attribute of the type.
-    // And two types that differ only in an attribute are different types.
-    // `is_const` returns true if the type has this attribute. (or perhaps if the type has this attribute and its value
-    // is `true`.)
     /// Return `true` if the type has the attribute `const`.
     pub fn is_const(&self) -> bool {
         use Type::*;
@@ -209,35 +208,55 @@ impl Type {
             | Duration(c)
             | Stretch(c)
             | BitArray(_, c) => matches!(*c, IsConst::True),
+            | IntArray(_, _,c) | UIntArray(_, _,c) | FloatArray(_, _,c)
+            | AngleArray(_, _,c) | ComplexArray(_, _,c)
+            | BoolArray(_,c) | DurationArray(_,c) => matches!(*c, IsConst::True),
+            | Qubit | QubitArray(..) | HardwareQubit => true,
+            // For types without an explicit const attribute (most arrays, qubits, etc.),
+            // we currently treat them as const for mutation checks elsewhere.
             _ => true,
         }
     }
 
     /// Return `true` if the type is a qubit or qubit register.
     pub fn is_quantum(&self) -> bool {
-        matches!(
-            self,
-            Type::Qubit | Type::QubitArray(..) | Type::HardwareQubit
-        )
+        matches!(self, Type::Qubit | Type::QubitArray(..) | Type::HardwareQubit)
     }
 
+    /// Return the dimensions vector if this is an array type.
     pub fn dims(&self) -> Option<Vec<usize>> {
         use Type::*;
         match self {
-            QubitArray(dims) | IntArray(dims) | BitArray(dims, _) => Some(dims.dims()),
+            BitArray(d, _)
+            | QubitArray(d)
+            | IntArray(d, _, _)
+            | UIntArray(d, _, _)
+            | FloatArray(d, _, _)
+            | AngleArray(d, _, _)
+            | ComplexArray(d, _, _)
+            | BoolArray(d,_)
+            | DurationArray(d,_) => Some(d.dims()),
             _ => None,
         }
     }
 
+    /// Return the number of dimensions if this is an array type.
     pub fn num_dims(&self) -> usize {
         use Type::*;
         match self {
-            QubitArray(dims) | IntArray(dims) | BitArray(dims, _) => dims.num_dims(),
+            BitArray(d, _)
+            | QubitArray(d)
+            | IntArray(d, _, _)
+            | UIntArray(d, _, _)
+            | FloatArray(d, _, _)
+            | AngleArray(d, _, _)
+            | ComplexArray(d, _, _)
+            | BoolArray(d,_)
+            | DurationArray(d,_) => d.num_dims(),
             _ => 0,
         }
     }
 
-    // FIXME: Not finished
     /// Return `true` if the types have the same base type.
     /// The number of dimensions and dimensions may differ.
     pub fn equal_up_to_shape(&self, other: &Type) -> bool {
@@ -245,16 +264,20 @@ impl Type {
         if self == other {
             return true;
         }
-        if matches!(self, BitArray(_, _)) && matches!(other, BitArray(_, _)) {
-            return true;
-        }
-        if matches!(self, QubitArray(_)) && matches!(other, QubitArray(_)) {
-            return true;
-        }
-        false
+        matches!(
+            (self, other),
+            (BitArray(..), BitArray(..))
+                | (QubitArray(..), QubitArray(..))
+                | (IntArray(..), IntArray(..))
+                | (UIntArray(..), UIntArray(..))
+                | (FloatArray(..), FloatArray(..))
+                | (AngleArray(..), AngleArray(..))
+                | (ComplexArray(..), ComplexArray(..))
+                | (BoolArray(..), BoolArray(..))
+                | (DurationArray(..), DurationArray(..))
+        )
     }
 
-    // FIXME: Not finished
     /// Return `true` if the types have the same base type and the same shape.
     /// The dimensions of each axis may differ.
     pub fn equal_up_to_dims(&self, other: &Type) -> bool {

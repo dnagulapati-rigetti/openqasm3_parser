@@ -1160,3 +1160,245 @@ extern bar(int x);
     // Return type propagated.
     assert!(matches!(ext.return_type(), Some(Type::Int(_, _))));
 }
+
+#[test]
+fn test_array_index_expr_type() {
+    // Declare an 8-bit array and read one element.
+    let code = r#"
+        bit[8] x;
+        bit b = x[3];
+    "#;
+
+    let (program, errors, symtab) = parse_string(code);
+    assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    assert_eq!(program.len(), 2);
+
+    // Verify symbol table type of x is bit[8].
+    let x_id = symtab.lookup("x").expect("x in symtab").symbol_id();
+    assert_eq!(
+        symtab[&x_id].symbol_type(),
+        &Type::BitArray(ArrayDims::D1(8), IsConst::False)
+    );
+
+    // 2nd statement is a classical declaration: `bit b = x[3];`
+    let decl = match &program[1] {
+        asg::Stmt::DeclareClassical(d) => d,
+        other => panic!("expected DeclareClassical, got {:?}", other),
+    };
+
+    // RHS should be an IndexedIdentifier
+    let binding = decl.initializer();
+    let init = binding.as_ref().expect("has initializer");
+    match init.expression() {
+        asg::Expr::IndexedIdentifier(_) => { /* good */ }
+        other => panic!("expected IndexedIdentifier, got {:?}", other),
+    }
+
+    // And the inferred type should be scalar bit (rank dropped)
+    assert_eq!(init.get_type(), &Type::Bit(IsConst::False));
+}
+
+#[test]
+fn parse_array_decl_asg_test() {
+    let code = r##"
+array[int[8], 4] a;
+array[float[64], 2, 3] m;
+const array[int[8], 4] b;
+array[int[8], 4] c = {1, 2, 3, 4};
+"##;
+
+    let (program, errors, symtab) =
+        parse_source_string(code, None, None::<&[&std::path::Path]>)
+            .take_context()
+            .as_tuple();
+
+    assert!(
+        errors.is_empty(),
+        "unexpected semantic errors: {:?}",
+        errors
+    );
+
+    assert_eq!(program.len(), 4, "expected 4 top-level items");
+
+    // Look up symbols
+    let a_id = symtab.lookup("a").expect("symbol a").symbol_id();
+    let m_id = symtab.lookup("m").expect("symbol m").symbol_id();
+    let b_id = symtab.lookup("b").expect("symbol b").symbol_id();
+    //let c_id = symtab.lookup("c").expect("symbol c").symbol_id();
+
+    // a : array[int[8], 4]  -> IntArray(D1(4), Some(8), const = False)
+    assert_eq!(
+        format!("{:?}", symtab[&a_id]),
+        "Symbol { name: \"a\", typ: IntArray(D1(4), Some(8), False) }"
+    );
+    assert!(
+        matches!(symtab[&a_id].symbol_type(), Type::IntArray(ArrayDims::D1(4), Some(8), IsConst::False)),
+        "type of a was {:?}",
+        symtab[&a_id].symbol_type()
+    );
+
+    // First statement is a classical declaration: `array[int[8], 4] a;`
+    let decl = match &program[0] {
+        asg::Stmt::DeclareClassical(d) => d,
+        other => panic!("expected DeclareClassical, got {:?}", other),
+    };
+
+    // There should be no initializer for first statement
+    assert!(decl.initializer().is_none());
+    
+    // m : array[float[64], 2, 3] -> FloatArray(D2(2,3), Some(64), const = False)
+    assert!(
+        matches!(symtab[&m_id].symbol_type(), Type::FloatArray(ArrayDims::D2(2, 3), Some(64), IsConst::False)),
+        "type of m was {:?}",
+        symtab[&m_id].symbol_type()
+    );
+
+    // b : array[int[8], 4]  -> IntArray(D1(4), Some(8), const = True)
+    assert_eq!(
+        format!("{:?}", symtab[&b_id]),
+        "Symbol { name: \"b\", typ: IntArray(D1(4), Some(8), True) }"
+    );
+
+    //assert_eq!(
+    //    format!("{:?}", symtab[&c_id]),
+    //    "Symbol { name: \"c\", typ: IntArray(D1(4), Some(8), False) }"
+    //)
+    
+}
+
+#[test]
+fn test_parse_array_parameters() {
+    let code = r##"
+array[int[8], 4] c = {1, 2, 3, 4};
+"##;
+
+    let (program, errors, symtab) =
+        parse_source_string(code, None, None::<&[&std::path::Path]>)
+            .take_context()
+            .as_tuple();
+
+    assert!(
+        errors.is_empty(),
+        "unexpected semantic errors: {:?}",
+        errors
+    );
+
+    assert_eq!(program.len(), 1, "expected 1 top-level items");
+
+    // symbol table checks
+    let c_id = symtab.lookup("c").expect("symbol c").symbol_id();
+    assert!(
+        matches!(symtab[&c_id].symbol_type(), Type::IntArray(ArrayDims::D1(4), Some(8), IsConst::False)),
+        "type of c was {:?}",
+        symtab[&c_id].symbol_type()
+    );
+
+    //  declaration shape and initializer 
+    // `array[int[8], 4] c = {1, 2, 3, 4};`
+    let decl_c = match &program[0] {
+        asg::Stmt::DeclareClassical(d) => d,
+        other => panic!("expected DeclareClassical for item[0], got {:?}", other),
+    };
+
+    let init = decl_c
+        .initializer()
+        .expect("c should have an initializer (set expression)");
+
+    // The initializer's overall type should be the array type of `c`.
+    assert!(
+        matches!(
+            init.get_type(),
+            Type::IntArray(ArrayDims::D1(4), Some(8), IsConst::False)
+        ),
+        "initializer type was {:?}",
+        init.get_type()
+    );
+
+    // The expression itself should be a ArrayLiteral with 4 elements.
+    let inner = match init.expression() {
+        asg::Expr::Cast(c) => c.operand(),                  // Cast(Array)
+        asg::Expr::Literal(asg::Literal::Array(_)) => init,             // or already literal
+        other => panic!("expected Cast(Array) or Array literal, got {:?}", other),
+    };
+
+    let array_lit = match inner.expression() {
+        asg::Expr::Literal(asg::Literal::Array(al)) => al,
+        other => panic!("expected Array literal, got {:?}", other),
+    };
+
+    // shape: D1(4)
+    assert_eq!(array_lit.dims(), &ArrayDims::D1(4));
+
+    // elements: 1,2,3,4 (all integer literals)
+    let elems = array_lit.elements();
+    assert_eq!(elems.len(), 4, "expected 4 elements in array literal");
+    for (i, texpr) in elems.iter().enumerate() {
+        match texpr.expression() {
+            asg::Expr::Literal(asg::Literal::Int(int_lit)) => {
+                assert_eq!(*int_lit.value(), (i as u128) + 1);
+            }
+            other => panic!("expected integer literal at pos {}, got {:?}", i, other),
+        }
+        // element types are scalar ints (default literal width/constness)
+        assert!(
+            matches!(texpr.get_type(), Type::Int(_, _)),
+            "element {} had type {:?}",
+            i,
+            texpr.get_type()
+        );
+    }
+}
+
+#[test]
+fn test_parse_extern_array() {
+    let code = r##"
+extern foo(array[int[32], 4] a, int b) -> bit;
+"##;
+
+    let (program, errors, symbol_table) = parse_string(code);
+
+    assert!(errors.is_empty(), "unexpected syntax/semantic errors: {errors:?}");
+    assert_eq!(program.len(), 1);
+
+    let ext = match &program[0] {
+        asg::Stmt::ExternStmt(ext) => ext,
+        other => panic!("expected ExternStmt, got {:?}", other),
+    };
+
+    // Name is bound
+    let name_id = ext.name().clone().unwrap();
+    assert_eq!(name_id, symbol_table.lookup("foo").unwrap().symbol_id());
+
+    // Two params captured
+    let params = ext.params();
+    assert_eq!(params.len(), 2);
+
+    // Grab the concrete symbol ids (adjust if your wrapper differs)
+    let a_id = params[0].clone().unwrap();
+    let b_id = params[1].clone().unwrap();
+
+    // a : array[int[32], 4]  -> IntArray(D1(4), Some(32), const = False)
+    use oq3_semantics::types::{ArrayDims, IsConst, Type};
+    assert!(
+        matches!(
+            symbol_table[&a_id].symbol_type(),
+            Type::IntArray(ArrayDims::D1(4), Some(32), IsConst::False)
+        ),
+        "param a type was {:?}",
+        symbol_table[&a_id].symbol_type()
+    );
+
+    // b : int -> Int(None, const = False)
+    assert!(
+        matches!(symbol_table[&b_id].symbol_type(), Type::Int(None, IsConst::False)),
+        "param b type was {:?}",
+        symbol_table[&b_id].symbol_type()
+    );
+
+    // return type: bit
+    assert!(
+        matches!(ext.return_type(), Some(Type::Bit(_))),
+        "return type was {:?}",
+        ext.return_type()
+    );
+}
