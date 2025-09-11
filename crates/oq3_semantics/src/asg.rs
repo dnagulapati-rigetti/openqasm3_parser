@@ -672,7 +672,7 @@ impl DefStmt {
 /// An `extern` introduces a function implemented outside of the current compilation unit (provided by a runtime or backend)
 /// It records the function name, its (possibly empty) list of typed parameters, and its optional return type
 /// `extern` declarations never have a body
-/// 
+///
 /// See the OpenQASM 3 specification for details:
 /// <https://openqasm.com/language/classical.html#extern-function-calls>
 

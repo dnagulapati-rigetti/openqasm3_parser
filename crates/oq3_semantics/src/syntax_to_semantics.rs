@@ -410,7 +410,7 @@ fn from_stmt(stmt: synast::Stmt, context: &mut Context) -> Option<asg::Stmt> {
             // According to the OpenQASM 3 specification, `extern` declarations introduce functions defined outside the current compilation unit
             // However, the spec is not explicit on whether extern functions may accept quantum types (e.g. qubits) as parameters
             // To avoid overcommitting the language surface, we conservatively enforce that all extern parameters are classical types only
-            // This restriction ensures forward compatibility: if future revisions of the spec explicitly allow non-classical parameters, 
+            // This restriction ensures forward compatibility: if future revisions of the spec explicitly allow non-classical parameters,
             // expanding support here will be a non-breaking change.
             //
             // See: <https://openqasm.com/language/classical.html#extern-function-calls>
@@ -418,7 +418,7 @@ fn from_stmt(stmt: synast::Stmt, context: &mut Context) -> Option<asg::Stmt> {
             with_scope!(context,  ScopeType::Subroutine,
                         let params = bind_typed_parameter_list(extern_stmt.typed_param_list(), context);
             );
-            
+
             let ret_type = extern_stmt.return_signature()
                 .and_then(|x| x.scalar_type())
                 .map(|x| from_scalar_type(&x, true, context));
