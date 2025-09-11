@@ -329,8 +329,11 @@ z + int[32](x);
 #[test]
 fn parse_extern_check() {
     let code = r##"
-extern f(int x);
-    "##;
+extern add(int a, int b) -> int;
+extern version() -> int;
+extern foo();
+extern bar(int x);
+"##;
     let parse = SourceFile::parse(code);
 
     // We expect no errors (zero errors) while parsing extern statements.

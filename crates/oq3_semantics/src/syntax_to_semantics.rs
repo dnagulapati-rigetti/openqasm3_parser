@@ -402,19 +402,23 @@ fn from_stmt(stmt: synast::Stmt, context: &mut Context) -> Option<asg::Stmt> {
         }
 
         synast::Stmt::Extern(extern_stmt) => {
-            let name_node = extern_stmt.name().unwrap();
+            let name_node = extern_stmt.name().expect("extern has no name");
             if !context.symbol_table().in_global_scope() {
                 context.insert_error(NotInGlobalScopeError, &name_node);
             }
+
+            // According to the OpenQASM 3 specification, `extern` declarations introduce functions defined outside the current compilation unit
+            // However, the spec is not explicit on whether extern functions may accept quantum types (e.g. qubits) as parameters
+            // To avoid overcommitting the language surface, we conservatively enforce that all extern parameters are classical types only
+            // This restriction ensures forward compatibility: if future revisions of the spec explicitly allow non-classical parameters, 
+            // expanding support here will be a non-breaking change.
+            //
+            // See: <https://openqasm.com/language/classical.html#extern-function-calls>
+
             with_scope!(context,  ScopeType::Subroutine,
                         let params = bind_typed_parameter_list(extern_stmt.typed_param_list(), context);
             );
-            // FIXME: Should we let subroutines have a parameterized type?
-            // This would be very convenient for matching signatures.
-            // let num_params = match params {
-            //     Some(ref params) => params.len(),
-            //     None => 0,
-            // };
+            
             let ret_type = extern_stmt.return_signature()
                 .and_then(|x| x.scalar_type())
                 .map(|x| from_scalar_type(&x, true, context));
@@ -424,7 +428,7 @@ fn from_stmt(stmt: synast::Stmt, context: &mut Context) -> Option<asg::Stmt> {
                 &Type::Void,
                 &name_node,
             );
-            Some(asg::ExternStmt::new(extern_name_symbol_id, params.unwrap(), ret_type).to_stmt())
+            Some(asg::ExternStmt::new(extern_name_symbol_id, params?,ret_type).to_stmt())
         }
 
         synast::Stmt::Barrier(barrier) => {

@@ -365,12 +365,11 @@ fn extern_stmt(p: &mut Parser<'_>, m: Marker) {
     // Read the name of the subroutine. (This records an error message on failure.)
     name_r(p, ITEM_RECOVERY_SET);
 
-    // Read optional gate parameters (not qubit and params)
+    // Parse the parameter list in parentheses
     if p.at(T!['(']) {
         params::param_list_def_params(p);
-    } else {
-        p.error("expected function arguments in extern");
     }
+
     opt_ret_type(p);
     // For extern, there is NO body. Require a semicolon.
     if p.at(T![;]) {

@@ -1130,9 +1130,12 @@ uint a = -99;
 }
 
 #[test]
-fn test_from_string_declaration_extern_lowers_to_asg_externstmt() {
+fn test_from_string_declaration_parse_extern_decl_asg() {
     let code = r#"
 extern add(int a, int b) -> int;
+extern foo();
+extern version() -> int;
+extern bar(int x);
 "#;
     let (program, errors, symbol_table) = parse_string(code);
 
@@ -1140,7 +1143,7 @@ extern add(int a, int b) -> int;
         errors.is_empty(),
         "unexpected syntax/semantic errors: {errors:?}"
     );
-    assert_eq!(program.len(), 1);
+    assert_eq!(program.len(), 4);
 
     let ext = match &program[0] {
         asg::Stmt::ExternStmt(ext) => ext,
