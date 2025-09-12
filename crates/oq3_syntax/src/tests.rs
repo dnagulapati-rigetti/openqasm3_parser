@@ -1,20 +1,20 @@
 // Copyright contributors to the openqasm-parser project
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::ast;
-use crate::ast::HasTextName; // for methods: text(), string()
-                             //use oq3_syntax::ast;
-                             // use std::{
-                             //    fs,
-                             //    path::{Path, PathBuf},
-                             // };
-                             // use ast::HasName;
-                             //use expect_test::expect_file;
-                             // use rayon::prelude::*;
-                             // Adds complication from rust-analyzer
-                             // use test_utils::{bench, bench_fixture, project_root};
-                             //use crate::{ast, AstNode, SourceFile, SyntaxError};
-use crate::SourceFile;
+use crate::ast::HasTextName;
+use crate::ast::{self, HasArgList, HasName}; // for methods: text(), string()
+                                             //use oq3_syntax::ast;
+                                             // use std::{
+                                             //    fs,
+                                             //    path::{Path, PathBuf},
+                                             // };
+                                             // use ast::HasName;
+                                             //use expect_test::expect_file;
+                                             // use rayon::prelude::*;
+                                             // Adds complication from rust-analyzer
+                                             // use test_utils::{bench, bench_fixture, project_root};
+                                             //use crate::{ast, AstNode, SourceFile, SyntaxError};
+use crate::{AstNode, SourceFile};
 
 // fn collect_stmts(code: &str) -> (usize, Vec<ast::Stmt>){
 //     let parse = SourceFile::parse(code);
@@ -333,11 +333,61 @@ extern add(int a, int b) -> int;
 extern version() -> int;
 extern foo();
 extern bar(int x);
+bar(10);
 "##;
     let parse = SourceFile::parse(code);
 
     // We expect no errors (zero errors) while parsing extern statements.
     assert_eq!(parse.errors.len(), 0);
+}
+
+#[test]
+fn parse_extern_check_call() {
+    let code = r##"
+extern bar(int x);
+bar(10);
+"##;
+    let parse = SourceFile::parse(code);
+
+    // We expect no errors (zero errors) while parsing extern statements.
+    assert_eq!(parse.errors.len(), 0);
+
+    let file: SourceFile = parse.tree();
+
+    //let mut ext = None;
+    let mut statements = file.statements();
+    //assert_eq!(statements.count(),2);
+
+    let ext = match statements.next().as_ref().expect("no extern stmt found") {
+        ast::Stmt::Extern(e) => e.clone(),
+        _ => panic!("first statement is not extern"),
+    };
+    assert_eq!(ext.name().expect("no name of extern").text(), "bar");
+    let call = match statements.next().expect("no call stmt found") {
+        ast::Stmt::ExprStmt(c) => c
+            .expr()
+            .and_then(|e| match e {
+                ast::Expr::CallExpr((c)) => Some(c),
+                _ => None,
+            })
+            .expect("should be call expr"),
+        _ => panic!("second statement is not call"),
+    };
+
+    let name = call.expr().expect("call has no expr");
+    assert_eq!(name.syntax().text(), "bar");
+    let expr_list = call
+        .arg_list()
+        .expect("call has no arg_list")
+        .expression_list()
+        .expect("arg_list has no expression_list");
+    assert_eq!(expr_list.exprs().clone().count(), 1);
+    let value = expr_list.exprs().next().expect("no expr in expr_list");
+    let num = match value {
+        ast::Expr::Literal(n) => n,
+        _ => panic!("expr is not int literal"),
+    };
+    assert_eq!((num.syntax().text()), "10");
 }
 
 #[test]
