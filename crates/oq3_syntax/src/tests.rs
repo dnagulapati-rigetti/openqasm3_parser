@@ -367,7 +367,7 @@ bar(10);
         ast::Stmt::ExprStmt(c) => c
             .expr()
             .and_then(|e| match e {
-                ast::Expr::CallExpr((c)) => Some(c),
+                ast::Expr::CallExpr(c) => Some(c),
                 _ => None,
             })
             .expect("should be call expr"),
