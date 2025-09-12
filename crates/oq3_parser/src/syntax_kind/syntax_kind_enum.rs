@@ -139,6 +139,7 @@ pub enum SyntaxKind {
     CAL,
     CONST,
     DEF,
+    EXTERN,
     DEF_CAL,
     DEF_CAL_GRAMMAR,
     DELAY_STMT,

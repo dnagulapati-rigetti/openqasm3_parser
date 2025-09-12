@@ -1128,3 +1128,35 @@ uint a = -99;
     let (_program, errors, _symbol_table) = parse_string(code);
     assert_eq!(errors.len(), 1);
 }
+
+#[test]
+fn test_from_string_declaration_parse_extern_decl_asg() {
+    let code = r#"
+extern add(int a, int b) -> int;
+extern foo();
+extern version() -> int;
+extern bar(int x);
+"#;
+    let (program, errors, symbol_table) = parse_string(code);
+
+    assert!(
+        errors.is_empty(),
+        "unexpected syntax/semantic errors: {errors:?}"
+    );
+    assert_eq!(program.len(), 4);
+
+    let ext = match &program[0] {
+        asg::Stmt::ExternStmt(ext) => ext,
+        _ => unreachable!("expected ExternStmt as first stmt"),
+    };
+
+    // Name is bound in the symbol table.
+    let name_id = ext.name().clone().unwrap();
+    assert_eq!(name_id, symbol_table.lookup("add").unwrap().symbol_id());
+
+    // Parameters captured
+    assert_eq!(ext.params().len(), 2);
+
+    // Return type propagated.
+    assert!(matches!(ext.return_type(), Some(Type::Int(_, _))));
+}

@@ -178,11 +178,11 @@ pub enum Stmt {
     DeclareQuantum(DeclareQuantum),
     DeclareHardwareQubit(DeclareHardwareQubit),
     DefStmt(DefStmt),
-    DefCal, // stub
+    ExternStmt(ExternStmt), // An extern statement is a declaration of function signature; such declarations do not return anthing
+    DefCal,                 // stub
     Delay(DelayStmt),
     End,
     ExprStmt(TExpr),
-    Extern, // stub
     ForStmt(ForStmt),
     GPhaseCall(GPhaseCall),
     GateCall(GateCall), // A statement because a gate call does not return anything
@@ -660,6 +660,52 @@ impl DefStmt {
 
     pub fn block(&self) -> &Block {
         &self.block
+    }
+
+    pub fn return_type(&self) -> Option<&Type> {
+        self.return_type.as_ref()
+    }
+}
+
+/// Represents an `extern` subroutine declaration.
+///
+/// An `extern` introduces a function implemented outside of the current compilation unit (provided by a runtime or backend)
+/// It records the function name, its (possibly empty) list of typed parameters, and its optional return type
+/// `extern` declarations never have a body
+///
+/// See the OpenQASM 3 specification for details:
+/// <https://openqasm.com/language/classical.html#extern-function-calls>
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExternStmt {
+    name: SymbolIdResult,
+    params: Vec<SymbolIdResult>,
+    return_type: Option<Type>,
+}
+
+impl ExternStmt {
+    pub fn new(
+        name: SymbolIdResult,
+        params: Vec<SymbolIdResult>,
+        return_type: Option<Type>,
+    ) -> ExternStmt {
+        ExternStmt {
+            name,
+            params,
+            return_type,
+        }
+    }
+
+    pub fn to_stmt(self) -> Stmt {
+        Stmt::ExternStmt(self)
+    }
+
+    pub fn name(&self) -> &SymbolIdResult {
+        &self.name
+    }
+
+    pub fn params(&self) -> &[SymbolIdResult] {
+        self.params.as_ref()
     }
 
     pub fn return_type(&self) -> Option<&Type> {

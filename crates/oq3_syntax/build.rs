@@ -390,6 +390,7 @@ mod sourcegen {
             "CAL",
             "CONST",
             "DEF",
+            "EXTERN",
             "DEF_CAL",
             "DEF_CAL_GRAMMAR",
             "DELAY_STMT",

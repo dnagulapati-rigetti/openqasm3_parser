@@ -20,7 +20,6 @@ use crate::context::Context;
 use crate::semantic_error::{SemanticErrorKind::*, SemanticErrorList};
 use crate::symbols::{ScopeType, SymbolErrorTrait, SymbolIdResult, SymbolTable};
 use oq3_source_file::{SourceFile, SourceString, SourceTrait};
-
 use oq3_syntax::ast as synast; // Syntactic AST
 
 use crate::with_scope;
@@ -400,6 +399,36 @@ fn from_stmt(stmt: synast::Stmt, context: &mut Context) -> Option<asg::Stmt> {
                 &name_node,
             );
             Some(asg::DefStmt::new(def_name_symbol_id, params.unwrap(), block, ret_type).to_stmt())
+        }
+
+        synast::Stmt::Extern(extern_stmt) => {
+            let name_node = extern_stmt.name().expect("extern has no name");
+            if !context.symbol_table().in_global_scope() {
+                context.insert_error(NotInGlobalScopeError, &name_node);
+            }
+
+            // According to the OpenQASM 3 specification, `extern` declarations introduce functions defined outside the current compilation unit
+            // However, the spec is not explicit on whether extern functions may accept quantum types (e.g. qubits) as parameters
+            // To avoid overcommitting the language surface, we conservatively enforce that all extern parameters are classical types only
+            // This restriction ensures forward compatibility: if future revisions of the spec explicitly allow non-classical parameters,
+            // expanding support here will be a non-breaking change.
+            //
+            // See: <https://openqasm.com/language/classical.html#extern-function-calls>
+
+            with_scope!(context,  ScopeType::Subroutine,
+                        let params = bind_typed_parameter_list(extern_stmt.typed_param_list(), context);
+            );
+
+            let ret_type = extern_stmt.return_signature()
+                .and_then(|x| x.scalar_type())
+                .map(|x| from_scalar_type(&x, true, context));
+
+            let extern_name_symbol_id = context.new_binding(
+                name_node.string().as_ref(),
+                &Type::Void,
+                &name_node,
+            );
+            Some(asg::ExternStmt::new(extern_name_symbol_id, params?,ret_type).to_stmt())
         }
 
         synast::Stmt::Barrier(barrier) => {
