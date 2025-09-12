@@ -79,7 +79,7 @@ pub(super) const EXPR_RECOVERY_SET: TokenSet = TokenSet::new(&[T![')'], T![']']]
 /// Probably ~~a bad idea~~ impossible to include parsing of other things here.
 pub(super) fn atom_expr(
     p: &mut Parser<'_>,
-    _r: Restrictions,
+    r: Restrictions,
 ) -> Option<(CompletedMarker, BlockLike)> {
     if let Some(m) = literal(p) {
         return Some((m, BlockLike::NotBlock));
@@ -101,7 +101,15 @@ pub(super) fn atom_expr(
         T![box] => box_expr(p, None),
         T![measure] => measure_expression(p),
         T![return] => return_expr(p),
-        T!['{'] => block_expr(p),
+        T!['{'] => {
+            if r.prefer_stmt {
+                // At statement level: this is a block
+                block_expr(p)
+            } else {
+                // In expression context: this is a brace-list expression (your array initializer)
+                array_literal(p)
+            }
+        }
         T![inv] | T![pow] | T![ctrl] | T![negctrl] => modified_gate_call_expr(p),
         T![gphase] => gphase_call_expr(p),
         IDENT if (la == IDENT || la == HARDWAREIDENT) => gate_call_expr(p),

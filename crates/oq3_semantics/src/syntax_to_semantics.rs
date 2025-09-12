@@ -20,7 +20,6 @@ use crate::context::Context;
 use crate::semantic_error::{SemanticErrorKind::*, SemanticErrorList};
 use crate::symbols::{ScopeType, SymbolErrorTrait, SymbolIdResult, SymbolTable};
 use oq3_source_file::{SourceFile, SourceString, SourceTrait};
-
 use oq3_syntax::ast as synast; // Syntactic AST
 
 use crate::with_scope;
@@ -402,6 +401,36 @@ fn from_stmt(stmt: synast::Stmt, context: &mut Context) -> Option<asg::Stmt> {
             Some(asg::DefStmt::new(def_name_symbol_id, params.unwrap(), block, ret_type).to_stmt())
         }
 
+        synast::Stmt::Extern(extern_stmt) => {
+            let name_node = extern_stmt.name().expect("extern has no name");
+            if !context.symbol_table().in_global_scope() {
+                context.insert_error(NotInGlobalScopeError, &name_node);
+            }
+
+            // According to the OpenQASM 3 specification, `extern` declarations introduce functions defined outside the current compilation unit
+            // However, the spec is not explicit on whether extern functions may accept quantum types (e.g. qubits) as parameters
+            // To avoid overcommitting the language surface, we conservatively enforce that all extern parameters are classical types only
+            // This restriction ensures forward compatibility: if future revisions of the spec explicitly allow non-classical parameters,
+            // expanding support here will be a non-breaking change.
+            //
+            // See: <https://openqasm.com/language/classical.html#extern-function-calls>
+
+            with_scope!(context,  ScopeType::Subroutine,
+                        let params = bind_typed_parameter_list(extern_stmt.typed_param_list(), context);
+            );
+
+            let ret_type = extern_stmt.return_signature()
+                .and_then(|x| x.scalar_type())
+                .map(|x| from_scalar_type(&x, true, context));
+
+            let extern_name_symbol_id = context.new_binding(
+                name_node.string().as_ref(),
+                &Type::Void,
+                &name_node,
+            );
+            Some(asg::ExternStmt::new(extern_name_symbol_id, params?,ret_type).to_stmt())
+        }
+
         synast::Stmt::Barrier(barrier) => {
             let gate_operands = from_qubit_list(barrier.qubit_list(), context);
             Some(asg::Stmt::Barrier(asg::Barrier::new(Some(gate_operands))))
@@ -555,6 +584,22 @@ fn negative_int(n: synast::IntNumber) -> asg::IntLiteral {
     asg::IntLiteral::new(num, false) // `false` means negative
 }
 
+// A list of scalar element types to a common scalar type for array literals.
+fn infer_array_elem_scalar(elems: &[asg::TExpr]) -> Type {
+    use crate::types;
+    if elems.is_empty() {
+        return Type::Undefined;
+    }
+    let mut acc = elems[0].get_type().clone();
+    if !acc.is_scalar() { return Type::Undefined; }
+    for e in &elems[1..] {
+        let t = e.get_type();
+        if !t.is_scalar() { return Type::Undefined; }
+        acc = types::promote_types(&acc, t);
+    }
+    acc
+}
+
 fn from_expr(expr_maybe: Option<synast::Expr>, context: &mut Context) -> Option<asg::TExpr> {
     let expr = expr_maybe?;
     match expr {
@@ -692,9 +737,11 @@ fn from_expr(expr_maybe: Option<synast::Expr>, context: &mut Context) -> Option<
             Some(asg::IndexExpression::new(expr.unwrap(), index).to_texpr())
         }
 
-        synast::Expr::IndexedIdentifier(indexed_identifier) => {
-            let (indexed_identifier, _typ) = ast_indexed_identifier(&indexed_identifier, context);
-            Some(indexed_identifier.to_texpr())
+        // using the existing to_texpr() will sets Type::ToDo
+        // updated - We need something that constructs the TExpr with the actual type (e.g., Qubit after qreg[i], or lower-rank arrays after multiple single-index drops)
+        synast::Expr::IndexedIdentifier(idx_id) => {
+            let (indexed_identifier, out_ty) = ast_indexed_identifier(&idx_id, context);
+            Some(asg::TExpr::new(asg::Expr::IndexedIdentifier(indexed_identifier), out_ty))
         }
 
         synast::Expr::MeasureExpression(ref measure_expr) => {
@@ -719,10 +766,24 @@ fn from_expr(expr_maybe: Option<synast::Expr>, context: &mut Context) -> Option<
 
         // Followng may be a parser error. But I think we will need to support BlockExpr anywhere here.
         synast::Expr::BlockExpr(_) => panic!("BlockExpr not supported."),
+        
+        synast::Expr::ArrayExpr(ae) => {
+            // Collect all child expressions inside the [...] into Vec<TExpr>
+            let elems: Vec<asg::TExpr> =
+                ae.exprs().filter_map(|e| from_expr(Some(e), context)).collect();
+            let elem_scalar = infer_array_elem_scalar(&elems);
+            let dims = ArrayDims::D1(elems.len());
+            Some(asg::ArrayLiteral::new(elems, dims, elem_scalar).to_texpr())
+        }
 
-        synast::Expr::ArrayExpr(_)
-        | synast::Expr::ArrayLiteral(_)
-        | synast::Expr::BoxExpr(_)
+        synast::Expr::ArrayLiteral(alit) => {
+            let elems = inner_expression_list(alit.expression_list().unwrap(), context);
+            let elem_scalar = infer_array_elem_scalar(&elems);
+            let dims = ArrayDims::D1(elems.len());
+            Some(asg::ArrayLiteral::new(elems, dims, elem_scalar).to_texpr())
+        }
+
+        synast::Expr::BoxExpr(_)
         | synast::Expr::CallExpr(_) => panic!("Expression not supported {expr:?}"),
 
         synast::Expr::GateCallExpr(_)
@@ -823,7 +884,8 @@ fn from_gate_operand(gate_operand: synast::GateOperand, context: &mut Context) -
         }
         synast::GateOperand::IndexedIdentifier(ref indexed_identifier) => {
             let (indexed_identifier, typ) = ast_indexed_identifier(indexed_identifier, context);
-            if !matches!(typ, Type::QubitArray(_)) {
+            // with the rank-drop above, qreg[i] will be a Type::Qubit
+            if !matches!(typ, Type::Qubit | Type::HardwareQubit | Type::QubitArray(_)) {
                 context.insert_error(IncompatibleTypesError, &gate_operand);
             }
             asg::GateOperand::IndexedIdentifier(indexed_identifier).to_texpr(typ)
@@ -1023,11 +1085,83 @@ fn from_classical_declaration_statement(
     type_decl: &synast::ClassicalDeclarationStatement,
     context: &mut Context,
 ) -> asg::Stmt {
-    if type_decl.array_type().is_some() {
+    if let Some(arr_ty_ast) = type_decl.array_type() {
+        // arrays must be global in your current rules (keep the same check)
         if !context.symbol_table().in_global_scope() {
             context.insert_error(NotInGlobalScopeError, type_decl);
         }
-        panic!("Array types are not supported yet in the ASG");
+
+        // element scalar type (e.g. int[8], float[64], bool, etc.)
+        let elem_scalar = from_scalar_type(&arr_ty_ast.scalar_type().unwrap(),
+                                           type_decl.const_token().is_some(),
+                                           context);
+        // dims: array[int[8], 4]  OR array[float[64], 2, 3]
+        let exprs = arraytype_dims_as_texprs(&arr_ty_ast, context);
+        if exprs.is_empty() {
+            let name_str = type_decl.name().unwrap().string();
+            let symbol_id = context.new_binding(name_str.as_ref(), &Type::Undefined, type_decl);
+            // still carry any initializer through so later passes can error/report properly
+            let initializer = from_expr(type_decl.expr(), context);
+            return asg::DeclareClassical::new(symbol_id, initializer).to_stmt();
+        }
+        let dims = dims_from_exprs(&exprs);
+
+        // build the lhs type using your existing array variants
+        let lhs_type = array_type_from_elem_scalar(&elem_scalar, dims, IsConst::from(type_decl.const_token().is_some()));
+
+        let name_str = type_decl.name().unwrap().string();
+        let initializer = from_expr(type_decl.expr(), context);
+        let symbol_id = context.new_binding(name_str.as_ref(), &lhs_type, type_decl);
+
+        // If there is an initializer, try to reconcile types (width/const) by casting.
+        if let Some(init) = initializer {
+            // If RHS is Cast(ArrayLiteral), inspect the inner ArrayLiteral for shape; else inspect RHS directly
+            let shape_probe: &asg::TExpr = match init.expression() {
+                asg::Expr::Cast(c) => c.operand(),
+                _ => &init,
+            };
+
+            // Detect array literal initializers
+            if let asg::Expr::Literal(asg::Literal::Array(alit)) = shape_probe.expression() {
+                // Compare literal dims to LHS dims
+                let lhs_dims_match = match &lhs_type {
+                    Type::IntArray(d, _, _)
+                    | Type::UIntArray(d, _, _)
+                    | Type::FloatArray(d, _, _)
+                    | Type::AngleArray(d, _, _)
+                    | Type::ComplexArray(d, _, _)
+                    | Type::BoolArray(d, _)
+                    | Type::BitArray(d, _)
+                    | Type::DurationArray(d, _) => alit.dims() == d,
+                    _ => false,
+                };
+
+                if lhs_dims_match {
+                    // Cast the whole literal to the LHS array type (fix widths/constness)
+                    let casted = asg::Cast::new(init.clone(), lhs_type.clone()).to_texpr();
+                    return asg::DeclareClassical::new(symbol_id.clone(), Some(casted)).to_stmt();
+                } else {
+                    // Record a friendly dimension mismatch but keep RHS for later diagnostics
+                    context.insert_error(crate::semantic_error::SemanticErrorKind::IncompatibleDimensionError, type_decl);
+                    return asg::DeclareClassical::new(symbol_id.clone(), Some(init)).to_stmt();
+                }
+            }
+
+            // ---- Fallback for non-array RHS (existing compatibility / cast logic) ----
+            let it = init.get_type();
+            if types::equal_up_to_constness(&lhs_type, it) {
+                return asg::DeclareClassical::new(symbol_id.clone(), Some(init)).to_stmt();
+            }
+            if it.equal_up_to_dims(&lhs_type) {
+                let casted = asg::Cast::new(init, lhs_type.clone()).to_texpr();
+                return asg::DeclareClassical::new(symbol_id.clone(), Some(casted)).to_stmt();
+            }
+            context.insert_error(crate::semantic_error::SemanticErrorKind::IncompatibleTypesError, type_decl);
+            return asg::DeclareClassical::new(symbol_id.clone(), Some(init)).to_stmt();
+        }
+
+        // No initializer - just declare.
+        return asg::DeclareClassical::new(symbol_id, None).to_stmt();
     }
     let scalar_type = type_decl.scalar_type().unwrap();
     let lhs_type = from_scalar_type(&scalar_type, type_decl.const_token().is_some(), context);
@@ -1079,9 +1213,39 @@ fn from_io_declaration_statement(
     type_decl: &synast::IODeclarationStatement,
     context: &mut Context,
 ) -> asg::Stmt {
-    if type_decl.array_type().is_some() {
-        panic!("Array types are not supported yet in the ASG");
+    if let Some(arr_ty_ast) = type_decl.array_type() {
+        // IO vars are non-const by definition in our semantics
+        let isconst = IsConst::False;
+
+        // element scalar (e.g., int[8], float[64], bool, etc)
+        let elem_scalar = from_scalar_type(&arr_ty_ast.scalar_type().unwrap(), false, context);
+
+        // dimensions
+        let exprs = arraytype_dims_as_texprs(&arr_ty_ast, context);
+        if exprs.is_empty() {
+            let name_str = type_decl.name().unwrap().string();
+            let symbol_id = context.new_binding(name_str.as_ref(), &Type::Undefined, &type_decl.name().unwrap());
+            return if type_decl.input_token().is_some() {
+                asg::InputDeclaration::new(symbol_id).to_stmt()
+            } else {
+                asg::OutputDeclaration::new(symbol_id).to_stmt()
+            };
+        }
+        let dims = dims_from_exprs(&exprs);
+
+        // build the array type using existing array variants
+        let lhs_type = array_type_from_elem_scalar(&elem_scalar, dims, isconst);
+
+        let name_str = type_decl.name().unwrap().string();
+        let symbol_id = context.new_binding(name_str.as_ref(), &lhs_type, &type_decl.name().unwrap());
+
+        return if type_decl.input_token().is_some() {
+            asg::InputDeclaration::new(symbol_id).to_stmt()
+        } else {
+            asg::OutputDeclaration::new(symbol_id).to_stmt()
+        };
     }
+
     let scalar_type = type_decl.scalar_type().unwrap();
     // Assume that input / ouput variables are not constant.
     let typ = from_scalar_type(&scalar_type, false, context);
@@ -1204,12 +1368,41 @@ fn ast_indexed_identifier(
     let (symbol_id, typ) = context
         .lookup_symbol(identifier.as_ref(), indexed_identifier)
         .as_tuple();
-    let indexes = indexed_identifier
+
+    let indexes: Vec<_> = indexed_identifier
         .index_operators()
         .map(|index| ast_from_index_operator(index, context))
         .collect();
-    (asg::IndexedIdentifier::new(symbol_id, indexes), typ)
+
+    use crate::asg::IndexOperator::ExpressionList;
+
+    // Only count single integer scalar indices
+    let mut n_single = 0usize;
+    let mut ok = true;
+    for ix in &indexes {
+        match ix {
+            ExpressionList(elist) if elist.len() == 1 => {
+                let t = elist.expressions[0].get_type();
+                if matches!(t, Type::Int(..) | Type::UInt(..)) {
+                    n_single += 1;
+                } else {
+                    ok = false; break;
+                }
+            }
+            _ => { ok = false; break; } // slices/sets/multi-index → no rank drop
+        }
+    }
+
+    let out_ty = if ok && n_single > 0 {
+        asg::array_type_after_n_single_indexes(typ.clone(), n_single)
+            .unwrap_or(typ.clone())
+    } else {
+        typ.clone()
+    };
+
+    (asg::IndexedIdentifier::new(symbol_id, indexes), out_ty)
 }
+
 
 // Bind all parameter names to new symbols. Assume they all have common type `typ`.
 // Log RedeclarationError when it occurs.
@@ -1234,7 +1427,28 @@ fn bind_typed_parameter_list(
         param_list
             .typed_params()
             .map(|param| {
-                let typ = from_scalar_type(&param.scalar_type().unwrap(), false, context);
+                // scalar type? easy path
+                let typ = if let Some(scal) = param.scalar_type() {
+                    from_scalar_type(&scal, false, context)
+                } else if let Some(arr_ty_ast) = find_array_type_in_typed_param(&param) {
+                    // array type: build element scalar + dims -> concrete array Type
+                    let elem_scalar =
+                        from_scalar_type(&arr_ty_ast.scalar_type().unwrap(), false, context);
+
+                    let exprs = arraytype_dims_as_texprs(&arr_ty_ast, context);
+                    if exprs.is_empty() {
+                        // Keep behavior consistent with your other sites: produce something
+                        // that lets later passes report useful diagnostics rather than panic.
+                        Type::Undefined
+                    } else {
+                        let dims = dims_from_exprs(&exprs);
+                        array_type_from_elem_scalar(&elem_scalar, dims, IsConst::False)
+                    }
+                } else {
+                    // Unknown shape (neither scalar nor array found) — be tolerant.
+                    Type::Undefined
+                };
+
                 let namestr = param.name().unwrap().string();
                 context.new_binding(namestr.as_ref(), &typ, &param)
             })
@@ -1258,3 +1472,114 @@ fn from_designator(arg: Option<synast::Designator>) -> Option<synast::Expr> {
 //     context.symbol_table.exit_scope();
 //     res // but there is no return value
 // }
+
+/// Extract ArrayDims from a list of constant integer expressions
+fn dims_from_exprs(exprs: &[asg::TExpr]) -> ArrayDims {
+    use types::ArrayDims;
+
+    match exprs.len() {
+        1 => ArrayDims::D1(const_usize_from_texpr(&exprs[0])),
+        2 => ArrayDims::D2(
+            const_usize_from_texpr(&exprs[0]),
+            const_usize_from_texpr(&exprs[1]),
+        ),
+        3 => ArrayDims::D3(
+            const_usize_from_texpr(&exprs[0]),
+            const_usize_from_texpr(&exprs[1]),
+            const_usize_from_texpr(&exprs[2]),
+        ),
+        _ => panic!("Arrays with {} dimensions are not supported yet", exprs.len()),
+    }
+}
+
+/// Expect a constant integer literal, return it as usize
+fn const_usize_from_texpr(expr: &asg::TExpr) -> usize {
+    match expr.expression() {
+        asg::Expr::Literal(asg::Literal::Int(int_lit)) if *int_lit.sign() => {
+            (*int_lit.value()).try_into().unwrap_or_else(|_| {
+                panic!("array dimension constant does not fit in usize")
+            })
+        }
+        _ => panic!("expected constant positive integer for array dimension"),
+    }
+}
+
+/// Map an element scalar Type + dims + constness -> correct array Type variant
+fn array_type_from_elem_scalar(elem: &Type, dims: ArrayDims, isconst: IsConst) -> Type {
+    use Type::*;
+    match elem {
+        Bit(_) => BitArray(dims, isconst),
+        Bool(_) => BoolArray(dims, isconst),
+        Int(w, _) => IntArray(dims, w.clone(), isconst),
+        UInt(w, _) => UIntArray(dims, w.clone(), isconst),
+        Float(w, _) => FloatArray(dims, w.clone(), isconst),
+        Angle(w, _) => AngleArray(dims, w.clone(), isconst),
+        Complex(w, _) => ComplexArray(dims, w.clone(), isconst),
+        Duration(_) => DurationArray(dims, isconst),
+        _ => {
+            // stretch, qubit, or other unsupported element types
+            Type::Undefined
+        }
+    }
+}
+
+// Try to extract the dimension expressions from a synast::ArrayType safely.
+fn arraytype_dims_as_texprs(
+    arr_ty_ast: &synast::ArrayType,
+    context: &mut Context,
+) -> Vec<asg::TExpr> {
+    use crate::semantic_error::SemanticErrorKind;
+    use oq3_syntax::AstNode;
+    if let Some(elist) = arr_ty_ast.expression_list() {
+        return inner_expression_list(elist, context);
+    }
+
+    // Fallback: walk descendants but EXCLUDE anything inside the scalar_type subtree
+    let scalar = match arr_ty_ast.scalar_type() {
+        Some(s) => s,
+        None => {
+            context.insert_error(SemanticErrorKind::ConstIntegerError, arr_ty_ast);
+            return Vec::new();
+        }
+    };
+    let sr = scalar.syntax().text_range();
+
+    let mut out = Vec::new();
+    for node in arr_ty_ast.syntax().descendants() {
+        if let Some(expr) = synast::Expr::cast(node.clone()) {
+            let r = node.text_range();
+            // Keep exprs that are NOT inside the scalar_type’s range
+            let inside_scalar = r.start() >= sr.start() && r.end() <= sr.end();
+            if !inside_scalar {
+                if let Some(texpr) = from_expr(Some(expr), context) {
+                    out.push(texpr);
+                }
+            }
+        }
+    }
+
+    if out.is_empty() {
+        // Couldn’t find any dims; record one friendly error
+        context.insert_error(SemanticErrorKind::ConstIntegerError, arr_ty_ast);
+    }
+    out
+}
+
+// Locate an ArrayType under a TypedParam without changing the AST API.
+fn find_array_type_in_typed_param(param: &synast::TypedParam) -> Option<synast::ArrayType> {
+    use oq3_syntax::AstNode;
+
+    // Try direct children first.
+    for child in param.syntax().children() {
+        if let Some(arr) = synast::ArrayType::cast(child) {
+            return Some(arr);
+        }
+    }
+    // Fallback: search deeper if the generator wrapped it differently.
+    for node in param.syntax().descendants() {
+        if let Some(arr) = synast::ArrayType::cast(node) {
+            return Some(arr);
+        }
+    }
+     None
+}

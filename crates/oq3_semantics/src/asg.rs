@@ -178,11 +178,11 @@ pub enum Stmt {
     DeclareQuantum(DeclareQuantum),
     DeclareHardwareQubit(DeclareHardwareQubit),
     DefStmt(DefStmt),
-    DefCal, // stub
+    ExternStmt(ExternStmt), // An extern statement is a declaration of function signature; such declarations do not return anthing
+    DefCal,                 // stub
     Delay(DelayStmt),
     End,
     ExprStmt(TExpr),
-    Extern, // stub
     ForStmt(ForStmt),
     GPhaseCall(GPhaseCall),
     GateCall(GateCall), // A statement because a gate call does not return anything
@@ -281,8 +281,105 @@ impl IndexExpression {
     }
 
     pub fn to_texpr(self) -> TExpr {
-        TExpr::new(self.to_expr(), Type::ToDo)
+        // If the index is a single integer (ExpressionList with len==1), then drop one rank. Drop k ranks when the index is an expression list of k scalar ints 
+        // Otherwise, we keep the original array type.
+        use crate::asg::IndexOperator::{ExpressionList, SetExpression};
+
+        let base_ty = self.expr.get_type().clone();
+        let out_ty = match &self.index {
+            // If it's an expression list, and all its entries are scalar ints,
+            // drop exactly that many ranks.
+            ExpressionList(elist) if elist.expressions.iter().all(|e|
+                matches!(e.get_type(), Type::Int(..) | Type::UInt(..))
+            ) => {
+                array_type_after_n_single_indexes(base_ty, elist.len()).unwrap_or(Type::ToDo)
+            }
+            // Slices/sets or lists containing non-scalar indices: keep shape for now.
+            SetExpression(_) | ExpressionList(_) => base_ty,
+        };
+        TExpr::new(self.to_expr(), out_ty)
     }
+}
+
+// Return the element scalar type for a 1D array type so None for non-arrays or unsupported arrays.
+pub fn array_element_scalar(ty: &Type) -> Option<Type> {
+    use Type::*;
+    Some(match ty {
+        BitArray(_, c) => Bit(c.clone()),
+        QubitArray(_) => Qubit,
+        IntArray(_, w, c)     => Int(w.clone(), c.clone()),
+        UIntArray(_, w, c)    => UInt(w.clone(), c.clone()),
+        FloatArray(_, w, c)   => Float(w.clone(), c.clone()),
+        AngleArray(_, w, c)   => Angle(w.clone(), c.clone()),
+        ComplexArray(_, w, c) => Complex(w.clone(), c.clone()),
+        BoolArray(_, c) => Bool(c.clone()),
+        DurationArray(_, c) => Duration(c.clone()),
+        _ => return None,
+    })
+}
+
+// Drop a single array dimension so for 2D/3D this returns a lower-rank array,
+// For 1D it returns the element scalar. Currently implemented for the array types that appear in `Type`.
+pub fn array_type_after_one_index(ty: Type) -> Option<Type> {
+    use Type::*;
+    match ty {
+        BitArray(d, c) => match d {
+            ArrayDims::D1(_) => array_element_scalar(&BitArray(d, c)), // Bit(c)
+            ArrayDims::D2(_a, b) => Some(BitArray(ArrayDims::D1(b), c)),
+            ArrayDims::D3(_a, b, cdim) => Some(BitArray(ArrayDims::D2(b, cdim), c)),
+        },
+        QubitArray(d) => match d {
+            ArrayDims::D1(_) => Some(Qubit),
+            ArrayDims::D2(_a, b) => Some(QubitArray(ArrayDims::D1(b))),
+            ArrayDims::D3(_a, b, c) => Some(QubitArray(ArrayDims::D2(b, c))),
+        },
+        IntArray(d, w, c) => match d {
+            ArrayDims::D1(_) => array_element_scalar(&IntArray(d, w, c)),
+            ArrayDims::D2(_a, b) => Some(IntArray(ArrayDims::D1(b), w, c)),
+            ArrayDims::D3(_a, b, cdim) => Some(IntArray(ArrayDims::D2(b, cdim), w, c)),
+        },
+        UIntArray(d, w, c) => match d {
+            ArrayDims::D1(_) => array_element_scalar(&UIntArray(d, w, c)),
+            ArrayDims::D2(_a, b) => Some(UIntArray(ArrayDims::D1(b), w, c)),
+            ArrayDims::D3(_a, b, cdim) => Some(UIntArray(ArrayDims::D2(b, cdim), w, c)),
+        },
+        FloatArray(d, w, c) => match d {
+            ArrayDims::D1(_) => array_element_scalar(&FloatArray(d, w, c)),
+            ArrayDims::D2(_a, b) => Some(FloatArray(ArrayDims::D1(b), w, c)),
+            ArrayDims::D3(_a, b, cdim) => Some(FloatArray(ArrayDims::D2(b, cdim), w, c)),
+        },
+        AngleArray(d, w, c) => match d {
+            ArrayDims::D1(_) => array_element_scalar(&AngleArray(d, w, c)),
+            ArrayDims::D2(_a, b) => Some(AngleArray(ArrayDims::D1(b), w, c)),
+            ArrayDims::D3(_a, b, cdim) => Some(AngleArray(ArrayDims::D2(b, cdim), w, c)),
+        },
+        ComplexArray(d, w, c) => match d {
+            ArrayDims::D1(_) => array_element_scalar(&ComplexArray(d, w, c)),
+            ArrayDims::D2(_a, b) => Some(ComplexArray(ArrayDims::D1(b), w, c)),
+            ArrayDims::D3(_a, b, cdim) => Some(ComplexArray(ArrayDims::D2(b, cdim), w, c)),
+        },
+        BoolArray(d, c) => match d {
+            ArrayDims::D1(_) => array_element_scalar(&BoolArray(d, c)),
+            ArrayDims::D2(_a, b) => Some(BoolArray(ArrayDims::D1(b), c)),
+            ArrayDims::D3(_a, b, cdim) => Some(BoolArray(ArrayDims::D2(b, cdim), c)),
+        },
+        DurationArray(d, c) => match d {
+            ArrayDims::D1(_) => array_element_scalar(&DurationArray(d, c)),
+            ArrayDims::D2(_a, b) => Some(DurationArray(ArrayDims::D1(b), c)),
+            ArrayDims::D3(_a, b, cdim) => Some(DurationArray(ArrayDims::D2(b, cdim), c)),
+        },
+        _ => None,
+    }
+}
+
+// Drop `n` single-dimension integer indices.
+pub fn array_type_after_n_single_indexes(mut ty: Type, n: usize) -> Option<Type> {
+    let mut k = n;
+    while k > 0 {
+        ty = array_type_after_one_index(ty)?;
+        k -= 1;
+    }
+    Some(ty)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -667,6 +764,52 @@ impl DefStmt {
     }
 }
 
+/// Represents an `extern` subroutine declaration.
+///
+/// An `extern` introduces a function implemented outside of the current compilation unit (provided by a runtime or backend)
+/// It records the function name, its (possibly empty) list of typed parameters, and its optional return type
+/// `extern` declarations never have a body
+///
+/// See the OpenQASM 3 specification for details:
+/// <https://openqasm.com/language/classical.html#extern-function-calls>
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExternStmt {
+    name: SymbolIdResult,
+    params: Vec<SymbolIdResult>,
+    return_type: Option<Type>,
+}
+
+impl ExternStmt {
+    pub fn new(
+        name: SymbolIdResult,
+        params: Vec<SymbolIdResult>,
+        return_type: Option<Type>,
+    ) -> ExternStmt {
+        ExternStmt {
+            name,
+            params,
+            return_type,
+        }
+    }
+
+    pub fn to_stmt(self) -> Stmt {
+        Stmt::ExternStmt(self)
+    }
+
+    pub fn name(&self) -> &SymbolIdResult {
+        &self.name
+    }
+
+    pub fn params(&self) -> &[SymbolIdResult] {
+        self.params.as_ref()
+    }
+
+    pub fn return_type(&self) -> Option<&Type> {
+        self.return_type.as_ref()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct MeasureExpression {
     operand: TExpr,
@@ -868,7 +1011,7 @@ pub enum Literal {
     BitString(BitStringLiteral),
     TimingIntLiteral(TimingIntLiteral),
     TimingFloatLiteral(TimingFloatLiteral),
-    Array, // stub
+    Array(ArrayLiteral),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -964,6 +1107,47 @@ impl IntLiteral {
 
     pub fn to_imaginary_texpr(self) -> TExpr {
         TExpr::new(self.to_imaginary_expr(), Type::Int(Some(64), IsConst::True))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ArrayLiteral {
+    elements: Vec<TExpr>,
+    dims: ArrayDims,
+    elem_scalar: Type, // element scalar type (must be scalar)
+}
+
+impl ArrayLiteral {
+    pub fn new(elements: Vec<TExpr>, dims: ArrayDims, elem_scalar: Type) -> ArrayLiteral {
+        ArrayLiteral { elements, dims, elem_scalar }
+    }
+    pub fn elements(&self) -> &[TExpr] { &self.elements }
+    pub fn dims(&self) -> &ArrayDims { &self.dims }
+    pub fn elem_scalar(&self) -> &Type { &self.elem_scalar }
+
+    pub fn to_expr(self) -> Expr {
+        Expr::Literal(Literal::Array(self))
+    }
+
+    pub fn to_texpr(self) -> TExpr {
+        use Type::*;
+        // Map scalar -> array type so bit arrays carry constness, others do not
+        let out_ty = match self.elem_scalar {
+            Bit(ref c) => BitArray(self.dims.clone(), c.clone()),
+            Bool(ref c) => BoolArray(self.dims.clone(), c.clone()),
+            Int(ref w, ref c)          => IntArray(self.dims.clone(), w.clone(), c.clone()),
+            UInt(ref w, ref c)         => UIntArray(self.dims.clone(), w.clone(), c.clone()),
+            Float(ref w, ref c)        => FloatArray(self.dims.clone(), w.clone(), c.clone()),
+            Angle(ref w, ref c)        => AngleArray(self.dims.clone(), w.clone(), c.clone()),
+            Complex(ref w, ref c)      => ComplexArray(self.dims.clone(), w.clone(), c.clone()),
+            Duration(ref c) => DurationArray(self.dims.clone(), c.clone()),
+            Stretch(_) => {
+                // stretch isn’t an allowed base array element per spec so mark undefined
+                Type::Undefined
+            }
+            _ => Type::Undefined,
+        };
+        TExpr::new(self.to_expr(), out_ty)
     }
 }
 
